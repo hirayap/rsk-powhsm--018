@@ -1,0 +1,104 @@
+/**
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2021 RSK Labs Ltd
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to
+ * deal in the Software without restriction, including without limitation the
+ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+ * sell copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ */
+
+#ifndef __LOG_H
+#define __LOG_H
+
+#if defined(HSM_PLATFORM_X86)
+
+#include <stdio.h>
+#include <stdlib.h>
+
+#ifdef LOGLEVEL_DEBUG
+#define DEBUG(...) INFO(__VA_ARGS__)
+#define DEBUG_HEX(...) INFO_HEX(__VA_ARGS__)
+#else
+#define DEBUG(...)
+#define DEBUG_HEX(...)
+#endif
+
+/**
+ * @brief Works just like printf
+ */
+void INFO(const char *format, ...);
+
+/**
+ * @brief Print buffer in hex format with prefix
+ *
+ * @param prefix the log prefix (the general log prefix will be prepended too)
+ * @param buffer the buffer containing the bytes to output as hex chars
+ * @param size the size of buffer in bytes
+ */
+void INFO_HEX(const char *prefix, const void *buffer, const size_t size);
+
+#elif defined(HSM_PLATFORM_SGX)
+
+#include <stdio.h>
+#include <stdbool.h>
+
+#ifdef LOGLEVEL_DEBUG
+#define DEBUG(...) INFO(__VA_ARGS__)
+#define DEBUG_HEX(...) INFO_HEX(__VA_ARGS__)
+#else
+#define DEBUG(...)
+#define DEBUG_HEX(...)
+#endif
+
+#define TRUSTED_LOG_PREFIX "  [*] "
+
+extern bool log_is_at_start_of_line;
+
+/**
+ * @brief Works just like printf, but prepends
+ * a prefix to every message
+ */
+#define INFO(format, ...)                                             \
+    {                                                                 \
+        if (log_is_at_start_of_line)                                  \
+            fprintf(stderr, TRUSTED_LOG_PREFIX);                      \
+        fprintf(stderr, format, ##__VA_ARGS__);                       \
+        log_is_at_start_of_line = format[sizeof(format) - 2] == '\n'; \
+    }
+
+/**
+ * @brief Print buffer in hex format with prefix
+ *
+ * @param prefix the log prefix (the general log prefix will be prepended too)
+ * @param buffer the buffer containing the bytes to output as hex chars
+ * @param size the size of buffer in bytes
+ */
+void INFO_HEX(const char *prefix, const void *buffer, const size_t size);
+
+#elif defined(HSM_PLATFORM_LEDGER)
+
+#define INFO(...)
+#define INFO_HEX(...)
+#define DEBUG(...)
+#define DEBUG_HEX(...)
+
+#else
+#error "HSM Platform undefined"
+#endif
+
+#endif // __LOG_H

@@ -1,0 +1,220 @@
+#!/bin/bash
+
+SCRIPT_DIR=$(realpath $(dirname $0))
+pushd $SCRIPT_DIR/.. > /dev/null
+ROOT_DIR="$(pwd)"
+popd > /dev/null
+
+source $SCRIPT_DIR/print_utils
+
+# Firmware directory
+FIRMWARE_DIR=$ROOT_DIR/firmware
+
+TARGET_ID="$(cat $ROOT_DIR/scripts/target.id)"
+
+# Binaries
+LBUTILS_DIR="$ROOT_DIR/bin/lbutils"
+LBUTILS_BUNDLE="$LBUTILS_DIR.tgz"
+LBUTILS="$LBUTILS_DIR/lbutils"
+ADMIN_DIR="$ROOT_DIR/bin/adm_ledger"
+ADMIN_BUNDLE="$ADMIN_DIR.tgz"
+ADMIN="$ADMIN_DIR/adm_ledger"
+
+function cleanBinaries() {
+    rm -rf $LBUTILS_DIR
+    rm -rf $ADMIN_DIR
+}
+
+function expandBinaries() {
+    cleanBinaries
+
+    mkdir -p $LBUTILS_DIR
+    tar -xzmf $LBUTILS_BUNDLE -C $LBUTILS_DIR
+
+    mkdir -p $ADMIN_DIR
+    tar -xzmf $ADMIN_BUNDLE -C $ADMIN_DIR
+}
+
+expandBinaries
+
+# Potentially existing file with an existing pin
+PIN_FILE="$ROOT_DIR/pin.txt"
+
+# Directory where public keys will be saved after onboarding is done
+EXPORT_DIR="$ROOT_DIR/export"
+PUBLIC_KEY_FILE="$EXPORT_DIR/public-keys.txt"
+PUBLIC_KEY_FILE_JSON="$EXPORT_DIR/public-keys.json"
+DEVICE_ATTESTATION_FILE="$EXPORT_DIR/device_attestation.json"
+ATTESTATION_FILE="$EXPORT_DIR/attestation.json"
+
+# Generate a random key to use for the interactions with the device
+# (so that the user only needs to confirm once)
+ROOTKEY=$($LBUTILS genCA | grep Private | sed 's/Private key: //g')
+
+# Custom CA
+RSK_CA="$(cat $ROOT_DIR/scripts/rsk-ca.txt)"
+
+function checkFirmware() {
+    # Check for firmware files
+    FILES="$FIRMWARE_DIR/signer.hex $FIRMWARE_DIR/signer.icon.hex $FIRMWARE_DIR/ui.hex $FIRMWARE_DIR/ui.icon.hex $FIRMWARE_DIR/ui.hex.sig"
+    for f in ${FILES}; do
+        if [[ ! -e $f ]]; then
+            print_error "Firmware file '$(basename $f)' does not exist."
+            cleanBinaries
+            exit 1
+        fi
+    done
+}
+
+function error() {
+    if [ $? -ne 0 ]; then
+        print_error "Error comunicating with the dongle. Please check connection and restart the process."
+        cleanBinaries
+        exit 1
+    fi
+}
+
+function checkForPinFile() {
+    if [[ -e $PIN_FILE ]]; then
+        print_error "Legacy pin file '$(basename $PIN_FILE)' found. Please backup and remove before continuing."
+        cleanBinaries
+        exit 1
+    fi
+}
+
+function promptRemoveAppWarning() {
+    print_warning "If the Ledger prompts for 'Remove app' followed by the app name and identifier, then please accept it."
+}
+
+function resetCA() {
+    $LBUTILS resetCA --targetId $TARGET_ID --rootPrivateKey $ROOTKEY > /dev/null 2> /dev/null
+}
+
+function setupCA() {
+    $LBUTILS setupCA --public $RSK_CA --name "RSK" --targetId $TARGET_ID --rootPrivateKey $ROOTKEY > /dev/null 2> /dev/null
+    error
+}
+
+function removeAllApps() {
+    APPS=$($LBUTILS listApps --targetId $TARGET_ID --rootPrivateKey $ROOTKEY --scp)
+    error
+    if [ -z "$APPS" ]; then
+        print_info "No apps to remove."
+        return
+    fi
+
+    echo "$APPS" | while IFS= read -r app; do
+        print_info "Removing the $app App..."
+        promptRemoveAppWarning
+        $LBUTILS delete --appName "$app" --targetId $TARGET_ID --rootPrivateKey $ROOTKEY > /dev/null 2> /dev/null
+        error
+    done
+}
+
+
+function installSigner() {
+    ICON="$(cat $FIRMWARE_DIR/signer.icon.hex)"
+    SIG="$(cat $FIRMWARE_DIR/signer.hex.sig)"
+    $LBUTILS load --delete --targetId $TARGET_ID --appFlags 0x00 \
+            --fileName $FIRMWARE_DIR/signer.hex \
+            --icon "$ICON" \
+            --appName "RSK Sign" \
+            --appVersion "4" \
+            --path "" \
+            --signature "$SIG" \
+            --rootPrivateKey $ROOTKEY > /dev/null 2> /dev/null
+    error
+}
+
+function installUI() {
+    ICON="$(cat $FIRMWARE_DIR/ui.icon.hex)"
+    SIG="$(cat $FIRMWARE_DIR/ui.hex.sig)"
+    $LBUTILS load --delete --targetId $TARGET_ID --appFlags 0x248 \
+            --fileName $FIRMWARE_DIR/ui.hex \
+            --icon "$ICON" \
+            --appName "UX" \
+            --appVersion "4" \
+            --path "" \
+            --signature "$SIG" \
+            --rootPrivateKey $ROOTKEY > /dev/null 2> /dev/null
+    error
+}
+
+function createOutputDir() {
+    rm -rf $EXPORT_DIR
+    mkdir -p $EXPORT_DIR
+}
+
+function onboard() {
+    $ADMIN onboard -o $DEVICE_ATTESTATION_FILE
+    error
+}
+
+function keys() {
+    $ADMIN pubkeys -o $PUBLIC_KEY_FILE -u
+    error
+}
+
+function attestation() {
+    $ADMIN attestation -t $DEVICE_ATTESTATION_FILE -o $ATTESTATION_FILE
+    error
+}
+
+function verify_attestation() {
+    $ADMIN verify_attestation -t $ATTESTATION_FILE -b $PUBLIC_KEY_FILE_JSON
+    error
+}
+
+print_info "Welcome to the Ledger Nano S powHSM Setup for RSK"
+echo
+checkForPinFile
+checkFirmware
+print_warning "Connect your ledger into recovery mode:"
+print_warning "Connect it while keeping the right button pressed until you see a Recovery message, then"
+print_warning "release the right button and wait until the menu appears."
+echo -e "Press [Enter] to continue"
+read continue
+print_info "Removing the existing installed apps (if any)..."
+print_warning "The Ledger will prompt for 'Allow Unknown Manager'. Please accept it."
+removeAllApps
+print_info "Removing the existing certification authority (if any)..."
+print_warning "If the Ledger prompts for 'Revoke certificate' followed by the certificate name and its public key, then please accept it."
+resetCA
+echo
+print_info "Setting up the RSK certification authority..."
+print_warning "The Ledger will prompt for 'Trust certificate' followed by the certificate name and its public key. Please accept it."
+setupCA
+echo
+print_info "Installing the RSK Signer App..."
+installSigner
+print_info "Installing the RSK UI..."
+installUI
+echo
+print_warning "App installation complete. Please disconnect and reconnect the device."
+print_warning "You should see a white screen upon restart."
+echo -e "Press [Enter] to continue"
+read continue
+echo
+print_warning "Onboarding the device..."
+createOutputDir
+onboard
+echo
+print_warning "Onboarding complete. Please disconnect and reconnect the device."
+echo -e "Press [Enter] to continue"
+read continue
+sleep 2
+echo
+print_info "Gathering attestation"
+attestation
+echo
+print_info "Gathering public keys"
+keys
+echo
+print_info "Verifying attestation"
+verify_attestation
+echo
+print_info "powHSM Setup complete."
+print_warning "Please disconnect the device."
+echo
+cleanBinaries
+exit 0

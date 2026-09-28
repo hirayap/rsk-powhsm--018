@@ -1,0 +1,30 @@
+#!/bin/bash
+
+BINDIR=$(realpath $(dirname $0))
+WORKDIR=$(realpath $BINDIR/..)
+DOCKER_IMAGE=powhsmsgx:runner
+
+QUIET=""
+echo -e "\e[96mBuilding docker image $DOCKER_IMAGE (this will take a few minutes)..."
+if [[ "$1" != "-v" ]]; then
+    QUIET="-q"
+    echo -e "Run with '-v' if you want to see progress detail\e[94m"
+fi
+docker build -t $DOCKER_IMAGE $BINDIR $QUIET
+echo -e "\e[96mDocker image build done.\e[0m"
+echo
+
+DOCKER_CNT="powhsmsgx-runner$POWHSM_UPGRADE_SUFFIX"
+DOCKER_USER="$(id -u):$(id -g)"
+HOSTNAME="powhsmsgx$POWHSM_UPGRADE_SUFFIX"
+NETWORK=powhsmsgx_net
+PORT=${POWHSM_UPGRADE_PORT:-7777}
+SGX_PRV_GID=$(getent group sgx_prv | cut -d: -f3)
+
+docker run --rm --name $DOCKER_CNT --user $DOCKER_USER -v $WORKDIR:/hsm \
+    --group-add $SGX_PRV_GID \
+    --hostname $HOSTNAME --network $NETWORK \
+    --device=/dev/sgx_enclave:/dev/sgx_enclave \
+    --device=/dev/sgx_provision:/dev/sgx_provision \
+    -w /hsm $DOCKER_IMAGE \
+    bin/hsmsgx ./bin/hsmsgx_enclave.signed -p$PORT -b0.0.0.0

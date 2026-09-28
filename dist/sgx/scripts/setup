@@ -1,0 +1,89 @@
+#!/bin/bash
+
+pushd $(dirname $0)/.. > /dev/null
+ROOT_DIR="$(pwd)"
+popd > /dev/null
+
+# HSM scripts directory
+SCRIPTS_DIR=$ROOT_DIR/scripts
+
+# Middleware binaries
+ADMIN_DIR="$ROOT_DIR/bin/adm_sgx"
+ADMIN_BUNDLE="$ADMIN_DIR.tgz"
+ADMIN_BIN="$ADMIN_DIR/adm_sgx"
+
+# The admin command used to interact with the powhsmsgx service
+ADMIN_CMD="$ADMIN_BIN --host powhsmsgx"
+
+# Directory where public keys will be saved after onboarding is done
+EXPORT_DIR="$ROOT_DIR/export"
+PUBLIC_KEY_FILE="$EXPORT_DIR/public-keys.txt"
+PUBLIC_KEY_FILE_JSON="$EXPORT_DIR/public-keys.json"
+ATTESTATION_FILE="$EXPORT_DIR/attestation.json"
+
+
+source $SCRIPTS_DIR/print_utils
+
+function cleanBinaries() {
+    rm -rf $ADMIN_DIR
+}
+
+function error() {
+    if [ $? -ne 0 ]; then
+        print_error "Error comunicating with the powhsm service. Please restart the process."
+        cleanBinaries
+        exit 1
+    fi
+}
+
+function expandBinaries() {
+    cleanBinaries
+
+    mkdir -p $ADMIN_DIR
+    tar -xzmf $ADMIN_BUNDLE -C $ADMIN_DIR
+}
+
+function onboard() {
+    $ADMIN_CMD onboard
+    error
+}
+
+function createOutputDir() {
+    rm -rf $EXPORT_DIR
+    mkdir -p $EXPORT_DIR
+}
+
+function attestation() {
+    $ADMIN_CMD attestation -o $ATTESTATION_FILE
+    error
+}
+
+function keys() {
+    $ADMIN_CMD pubkeys -uo $PUBLIC_KEY_FILE
+    error
+}
+
+function verify_attestation() {
+    $ADMIN_CMD verify_attestation -t $ATTESTATION_FILE -b $PUBLIC_KEY_FILE_JSON
+    error
+}
+
+expandBinaries
+print_warning "Onboarding the powHSM..."
+onboard
+print_warning "Onboarding complete."
+echo
+print_info "Gathering attestation"
+createOutputDir
+attestation
+echo
+print_info "Gathering public keys"
+keys
+echo
+print_info "Verifying attestation"
+verify_attestation
+echo
+cleanBinaries
+echo
+print_info "powHSM Setup complete."
+exit 0

@@ -1,0 +1,182 @@
+#!/bin/bash
+
+SCRIPT_DIR=$(realpath $(dirname $0))
+pushd $SCRIPT_DIR/.. > /dev/null
+ROOT_DIR="$(pwd)"
+popd > /dev/null
+
+source $SCRIPT_DIR/print_utils
+
+TARGET_ID="$(cat $ROOT_DIR/scripts/target.id)"
+
+# Binaries
+LBUTILS_DIR="$ROOT_DIR/bin/lbutils"
+LBUTILS_BUNDLE="$LBUTILS_DIR.tgz"
+LBUTILS="$LBUTILS_DIR/lbutils"
+ADMIN_DIR="$ROOT_DIR/bin/adm_ledger"
+ADMIN_BUNDLE="$ADMIN_DIR.tgz"
+ADMIN="$ADMIN_DIR/adm_ledger"
+
+function cleanBinaries() {
+    rm -rf $LBUTILS_DIR
+    rm -rf $ADMIN_DIR
+}
+
+function expandBinaries() {
+    cleanBinaries
+
+    mkdir -p $LBUTILS_DIR
+    tar -xzmf $LBUTILS_BUNDLE -C $LBUTILS_DIR
+
+    mkdir -p $ADMIN_DIR
+    tar -xzmf $ADMIN_BUNDLE -C $ADMIN_DIR
+}
+
+expandBinaries
+
+FIRMWARE_DIR=$ROOT_DIR/firmware
+
+# File with the current pin
+PIN_FILE="$ROOT_DIR/pin.txt"
+# Signer authorization file
+SIGNER_AUTH_FILE="$FIRMWARE_DIR/signer_auth.json"
+# File where public keys will be saved after upgrading is done
+EXPORT_DIR="$ROOT_DIR/export"
+PUBLIC_KEY_FILE="$EXPORT_DIR/public-keys.txt"
+PUBLIC_KEY_FILE_JSON="$EXPORT_DIR/public-keys.json"
+DEVICE_ATTESTATION_FILE="$ROOT_DIR/device_attestation.json"
+ATTESTATION_FILE="$EXPORT_DIR/attestation.json"
+
+function error() {
+    if [ $? -ne 0 ]; then
+        print_error "Error comunicating with the dongle. Please check that dongle is onboarded, check connection and restart the process."
+        cleanBinaries
+        exit 1
+    fi
+}
+
+function checkForPinFile() {
+    if [[ ! -e $PIN_FILE ]]; then
+        print_error "Pin file '$(basename $PIN_FILE)' not found."
+        cleanBinaries
+        exit 1
+    fi
+}
+
+function checkForSignerAuthFile() {
+    if [[ ! -e $SIGNER_AUTH_FILE ]]; then
+        print_error "Signer authorization file '$(basename $SIGNER_AUTH_FILE)' not found."
+        cleanBinaries
+        exit 1
+    fi
+}
+
+function checkForAttestationFile() {
+    if [[ ! -e $DEVICE_ATTESTATION_FILE ]]; then
+        print_error "Attestation file '$(basename $DEVICE_ATTESTATION_FILE)' not found."
+        cleanBinaries
+        exit 1
+    fi
+}
+
+function checkFirmware() {
+    # Check for firmware files
+    FILES="$FIRMWARE_DIR/signer.hex $FIRMWARE_DIR/signer.icon.hex"
+    for f in ${FILES}; do
+        if [[ ! -e $f ]]; then
+            print_error "Firmware file '$(basename $f)' does not exist."
+            cleanBinaries
+            exit 1
+        fi
+    done
+}
+
+function authorizeSigner() {
+    $ADMIN authorize_signer -p$(cat $PIN_FILE) -z$SIGNER_AUTH_FILE
+    error
+}
+
+function unlockToMenu() {
+    $ADMIN unlock -p$(cat $PIN_FILE) -e
+    error
+}
+
+function removeSigner() {
+    $LBUTILS delete --appName "RSK Sign" --targetId $TARGET_ID > /dev/null 2> /dev/null
+    error
+}
+
+function installSigner() {
+    ICON="$(cat $FIRMWARE_DIR/signer.icon.hex)"
+    $LBUTILS load --delete --targetId $TARGET_ID --appFlags 0x00 \
+            --fileName $FIRMWARE_DIR/signer.hex \
+            --icon "$ICON" \
+            --appName "RSK Sign" \
+            --appVersion "4" \
+            --path "" > /dev/null 2> /dev/null
+    error
+}
+
+function createOutputDir() {
+    rm -rf $EXPORT_DIR
+    mkdir -p $EXPORT_DIR
+}
+
+function keys() {
+    $ADMIN pubkeys -o $PUBLIC_KEY_FILE -u
+    error
+}
+
+function attestation() {
+    $ADMIN attestation -p$(cat $PIN_FILE) -t $DEVICE_ATTESTATION_FILE -o $ATTESTATION_FILE
+    error
+}
+
+function verify_attestation() {
+    $ADMIN verify_attestation -t $ATTESTATION_FILE -b $PUBLIC_KEY_FILE_JSON
+    error
+}
+
+print_info "Welcome to the Ledger Nano S powHSM Upgrade for RSK"
+print_info "Please make sure your HSM is onboarded before continuing with the firmware upgrade."
+echo
+checkFirmware
+checkForPinFile
+checkForSignerAuthFile
+checkForAttestationFile
+
+print_warning "Connect your ledger."
+echo -e "Press [Enter] to continue"
+read continue
+sleep 2
+echo
+print_info "Authorising the new RSK Signer App..."
+authorizeSigner
+unlockToMenu
+sleep 2
+echo
+print_info "Removing the old RSK Signer App..."
+removeSigner
+print_info "Installing the new RSK Signer App..."
+installSigner
+echo
+print_warning "App upgrade complete. Please disconnect and reconnect the device."
+echo -e "Press [Enter] to continue"
+read continue
+sleep 2
+createOutputDir
+echo
+print_info "Gathering attestation"
+attestation
+echo
+print_info "Gathering public keys"
+keys
+echo
+print_info "Verifying attestation"
+verify_attestation
+echo
+print_info "powHSM Upgrade complete."
+print_warning "Please disconnect the device."
+echo
+cleanBinaries
+exit 0

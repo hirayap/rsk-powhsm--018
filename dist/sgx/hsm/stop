@@ -1,0 +1,4 @@
+#!/bin/bash
+
+DOCKER_CNT="powhsmsgx-runner$POWHSM_UPGRADE_SUFFIX"
+docker stop $DOCKER_CNT

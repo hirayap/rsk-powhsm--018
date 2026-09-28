@@ -1,0 +1,7 @@
+{
+    "name": "Empty APDU command fails",
+    "operation": "rawCommand",
+    "command": "",
+    "expected": "0x6982",
+    "runOn": ["tcpsigner", "sgx", "sgxsim"]
+}

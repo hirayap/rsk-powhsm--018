@@ -1,0 +1,11 @@
+# Private key file
+private.pem
+
+# OE generated files
+src/trusted/generated/hsm_args.h
+src/trusted/generated/hsm_t.c
+src/trusted/generated/hsm_t.h
+src/untrusted/generated/hsm_args.h
+src/untrusted/generated/hsm_u.c
+src/untrusted/generated/hsm_u.h
+
